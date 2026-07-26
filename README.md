@@ -6,11 +6,13 @@
 
 ## 文档
 
-- [产品需求文档（PRD）](docs/PRD.md)
+- [产品需求文档（PRD）](docs/PRD.md) — 定位、三层需求、MVP 范围
+- [技术文档（TECH）](docs/TECH.md) — 前后端技术路线、架构、API 与数据模型
+- [项目任务（TASKS）](docs/TASKS.md) — 任务看板 + 决策日志，随开发实时更新
 
 ## 状态
 
-P0 阶段：访谈 agent 对话设计中。
+P0 阶段：访谈 agent 对话设计中。当前进度见 [TASKS.md](docs/TASKS.md)。
 
 ## 开发
 
