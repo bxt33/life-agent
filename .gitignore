@@ -1,0 +1,29 @@
+# 依赖
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 构建产物
+dist/
+build/
+*.egg-info/
+
+# 环境变量与密钥
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志与缓存
+*.log
+.cache/
