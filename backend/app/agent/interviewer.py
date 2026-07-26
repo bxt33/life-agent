@@ -9,7 +9,7 @@ import logging
 from .. import llm
 from ..config import settings
 from ..models import Message
-from . import prompts
+from . import memory, prompts
 from .state import InterviewState
 
 logger = logging.getLogger(__name__)
@@ -35,10 +35,33 @@ def build_messages(state: InterviewState, history: list[Message]) -> list[dict]:
         messages.append({"role": msg.role, "content": msg.text})
     # 状态栏：每轮替换、尾部追加（借用 user 槽位的系统元信息）
     status = state.render_status()
+    status += memory.render_for_interviewer()  # 跨会话长期记忆
     if state.safety_flag:
         status += "\n\n" + prompts.load("safety")
     messages.append({"role": "user", "content": status})
     return messages
+
+
+async def suggest_replies(history: list[Message]) -> list[str]:
+    """为最新一轮对话生成 2~3 个可点选的回应（降低表达门槛）。失败返回空。"""
+    if settings.mock_mode or not history:
+        return []
+    recent = "\n".join(
+        f"{'受访者' if m.role == 'user' else '采访者'}：{m.text}" for m in history[-4:]
+    )
+    try:
+        raw = await llm.chat(
+            [
+                {"role": "system", "content": prompts.load("suggest_replies")},
+                {"role": "user", "content": f"最近的对话：\n\n{recent}"},
+            ],
+            json_mode=True,
+        )
+        items = llm.parse_json(raw).get("suggestions", [])
+        return [str(s).strip() for s in items if str(s).strip()][:3]
+    except Exception:
+        logger.exception("suggest replies failed")
+        return []
 
 
 async def extract_state_update(user_text: str) -> dict:

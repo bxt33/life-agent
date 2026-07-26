@@ -1,7 +1,11 @@
+import json
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
+from ..agent import memory as memory_agent
+from ..agent import reactions as reactions_agent
 from ..agent import story as story_agent
 from ..db import engine
 from ..models import InterviewSession, Message, Story
@@ -15,12 +19,19 @@ class StoryPatch(BaseModel):
 
 
 def _story_out(story: Story) -> dict:
+    reactions = []
+    if story.reactions_json:
+        try:
+            reactions = json.loads(story.reactions_json)
+        except json.JSONDecodeError:
+            reactions = []
     return {
         "id": story.id,
         "session_id": story.session_id,
         "draft_md": story.draft_md,
         "final_md": story.final_md,
         "status": story.status,
+        "reactions": reactions,
         "created_at": story.created_at.isoformat(),
     }
 
@@ -43,6 +54,32 @@ async def generate_story(session_id: int):
 
     with Session(engine) as db:
         story = Story(session_id=session_id, draft_md=draft, review_notes=review_notes)
+        db.add(story)
+        db.commit()
+        db.refresh(story)
+
+    # 轨迹最完整的时机：顺带抽取跨会话长期记忆（失败不影响故事稿返回）
+    await memory_agent.extract_and_store(session_id, list(history))
+
+    return _story_out(story)
+
+
+@router.post("/stories/{story_id}/reactions")
+async def story_reactions(story_id: int):
+    """读者评审团：三位 persona 读者并行给出真实反应。"""
+    with Session(engine) as db:
+        story = db.get(Story, story_id)
+        if not story:
+            raise HTTPException(404, "story not found")
+        text = story.final_md or story.draft_md
+
+    reactions = await reactions_agent.panel_reactions(text)
+    if not reactions:
+        raise HTTPException(502, "读者们暂时没有回应（模型服务异常），稍后再试")
+
+    with Session(engine) as db:
+        story = db.get(Story, story_id)
+        story.reactions_json = json.dumps(reactions, ensure_ascii=False)
         db.add(story)
         db.commit()
         db.refresh(story)

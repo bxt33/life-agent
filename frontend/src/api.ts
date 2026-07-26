@@ -2,7 +2,28 @@ export type SSEEvent =
   | { type: "delta"; text: string }
   | { type: "done"; stage: string; turns: number }
   | { type: "safety" }
+  | { type: "suggestions"; items: string[] }
   | { type: "error"; message: string };
+
+export interface TopicCard {
+  id: string;
+  icon: string;
+  title: string;
+  hint: string;
+}
+
+export interface Reaction {
+  reader: string;
+  desc: string;
+  resonated: boolean;
+  line: string;
+}
+
+export interface MemoryOut {
+  id: number;
+  text: string;
+  created_at: string;
+}
 
 export interface SessionSummary {
   id: number;
@@ -23,6 +44,7 @@ export interface StoryOut {
   draft_md: string;
   final_md: string;
   status: string;
+  reactions: Reaction[];
   created_at: string;
 }
 
@@ -35,7 +57,36 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-export const createSession = () => request<{ id: number }>("/api/sessions", { method: "POST" });
+export const createSession = (cardId?: string) =>
+  request<{ id: number; opening: string }>("/api/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ card_id: cardId ?? null }),
+  });
+
+export const listCards = () => request<TopicCard[]>("/api/cards");
+
+export const transcribeAudio = async (sessionId: number, blob: Blob) => {
+  const form = new FormData();
+  form.append("file", blob, "voice.webm");
+  const res = await fetch(`/api/sessions/${sessionId}/transcribe`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? `转写失败（${res.status}）`);
+  }
+  return res.json() as Promise<{ text: string; audio_path: string }>;
+};
+
+export const storyReactions = (storyId: number) =>
+  request<StoryOut>(`/api/stories/${storyId}/reactions`, { method: "POST" });
+
+export const listMemories = () => request<MemoryOut[]>("/api/memories");
+
+export const deleteMemory = (id: number) =>
+  request<{ ok: boolean }>(`/api/memories/${id}`, { method: "DELETE" });
 
 export const listSessions = () => request<SessionSummary[]>("/api/sessions");
 
@@ -58,11 +109,12 @@ export async function sendMessage(
   sessionId: number,
   text: string,
   onEvent: (ev: SSEEvent) => void,
+  audioPath = "",
 ): Promise<void> {
   const res = await fetch(`/api/sessions/${sessionId}/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, audio_path: audioPath }),
   });
   if (!res.ok || !res.body) throw new Error(`发送失败（${res.status}）`);
 

@@ -32,4 +32,14 @@ class Story(SQLModel, table=True):
     final_md: str = ""
     status: str = "draft"  # draft / confirmed / published
     review_notes: str = ""  # grounding 校验记录，便于观察 reviewer 拦下了什么
+    reactions_json: str = ""  # 读者评审团的反应（多 agent 共鸣反馈）
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class UserMemory(SQLModel, table=True):
+    """跨会话的用户长期记忆（Enhanced Notes 级别）。用户可查看、可删除。"""
+
+    id: int | None = Field(default=None, primary_key=True)
+    text: str
+    source_session_id: int = Field(foreign_key="interviewsession.id")
     created_at: datetime = Field(default_factory=utcnow)

@@ -1,38 +1,60 @@
 import json
+import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from .. import llm
-from ..agent import interviewer, safety
+from ..agent import asr, cards, interviewer, safety
 from ..agent.state import InterviewState
+from ..config import DATA_DIR
 from ..db import engine
 from ..models import InterviewSession, Message
 
-router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+router = APIRouter(prefix="/api", tags=["sessions"])
+
+AUDIO_DIR = DATA_DIR / "audio"
+
+
+class SessionIn(BaseModel):
+    card_id: str | None = None
 
 
 class MessageIn(BaseModel):
     text: str
+    audio_path: str = ""  # 语音输入时关联原声文件（P2 视频素材）
 
 
 def _sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-@router.post("")
-def create_session():
+@router.get("/cards")
+def list_cards():
+    return [
+        {"id": c["id"], "icon": c["icon"], "title": c["title"], "hint": c["hint"]}
+        for c in cards.CARDS
+    ]
+
+
+@router.post("/sessions")
+def create_session(body: SessionIn | None = None):
+    card = cards.get_card(body.card_id) if body and body.card_id else None
+    opening = card["opening"] if card else cards.FREE_OPENING
     with Session(engine) as db:
         session = InterviewSession()
         db.add(session)
         db.commit()
         db.refresh(session)
-        return {"id": session.id, "stage": session.stage}
+        # 开场白入库：轨迹完整（模型下轮能看到自己的开场），刷新/续聊不丢
+        db.add(Message(session_id=session.id, role="assistant", text=opening))
+        db.commit()
+        return {"id": session.id, "stage": session.stage, "opening": opening}
 
 
-@router.get("")
+@router.get("/sessions")
 def list_sessions():
     with Session(engine) as db:
         sessions = db.exec(
@@ -59,7 +81,7 @@ def list_sessions():
         return out
 
 
-@router.get("/{session_id}/messages")
+@router.get("/sessions/{session_id}/messages")
 def list_messages(session_id: int):
     with Session(engine) as db:
         session = db.get(InterviewSession, session_id)
@@ -74,7 +96,29 @@ def list_messages(session_id: int):
         }
 
 
-@router.post("/{session_id}/messages")
+@router.post("/sessions/{session_id}/transcribe")
+async def transcribe_audio(session_id: int, file: UploadFile):
+    """语音转写：原始音频落盘（视频素材，不能丢），返回文本供发送。"""
+    with Session(engine) as db:
+        if not db.get(InterviewSession, session_id):
+            raise HTTPException(404, "session not found")
+
+    session_dir = AUDIO_DIR / str(session_id)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    suffix = (file.filename or "audio.webm").rsplit(".", 1)[-1]
+    audio_path = session_dir / f"{int(time.time() * 1000)}.{suffix}"
+    audio_path.write_bytes(await file.read())
+
+    try:
+        text = await asr.transcribe(str(audio_path))
+    except Exception as exc:
+        raise HTTPException(502, f"语音转写失败：{exc}") from exc
+    if not text:
+        raise HTTPException(422, "没有听清，再试一次？")
+    return {"text": text, "audio_path": str(audio_path.relative_to(DATA_DIR))}
+
+
+@router.post("/sessions/{session_id}/messages")
 async def post_message(session_id: int, body: MessageIn):
     text = body.text.strip()
     if not text:
@@ -85,7 +129,11 @@ async def post_message(session_id: int, body: MessageIn):
         if not session:
             raise HTTPException(404, "session not found")
         state = InterviewState.loads(session.state_json)
-        db.add(Message(session_id=session_id, role="user", text=text))
+        db.add(
+            Message(
+                session_id=session_id, role="user", text=text, audio_path=body.audio_path
+            )
+        )
         db.commit()
 
     async def stream():
@@ -125,6 +173,15 @@ async def post_message(session_id: int, body: MessageIn):
                 db.commit()
 
         yield _sse({"type": "done", "stage": state.stage, "turns": state.turns})
+
+        # 快捷回应：降低下一轮的表达门槛（放在 done 之后，不拖慢正文显示）
+        if reply:
+            history_after = history + [
+                Message(session_id=session_id, role="assistant", text=reply)
+            ]
+            suggestions = await interviewer.suggest_replies(history_after)
+            if suggestions:
+                yield _sse({"type": "suggestions", "items": suggestions})
 
     return StreamingResponse(
         stream(),

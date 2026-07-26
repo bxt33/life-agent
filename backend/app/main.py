@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .db import init_db
-from .routers import sessions, stories
+from .routers import memories, sessions, stories
 
 logging.basicConfig(level=logging.INFO)
 
@@ -32,6 +32,7 @@ app.add_middleware(
 
 app.include_router(sessions.router)
 app.include_router(stories.router)
+app.include_router(memories.router)
 
 
 @app.get("/api/health")

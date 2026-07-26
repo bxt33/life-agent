@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listStories, updateStory, type StoryOut } from "./api";
+import { listStories, storyReactions, updateStory, type StoryOut } from "./api";
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "草稿",
@@ -12,6 +12,7 @@ export default function Stories({ refreshKey }: { refreshKey: number }) {
   const [current, setCurrent] = useState<StoryOut | null>(null);
   const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
+  const [reacting, setReacting] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -41,6 +42,21 @@ export default function Stories({ refreshKey }: { refreshKey: number }) {
       setError(String(err));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function askReaders() {
+    if (!current || reacting) return;
+    setReacting(true);
+    setError("");
+    try {
+      const updated = await storyReactions(current.id);
+      setStories((all) => all.map((s) => (s.id === updated.id ? updated : s)));
+      setCurrent(updated);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setReacting(false);
     }
   }
 
@@ -88,13 +104,23 @@ export default function Stories({ refreshKey }: { refreshKey: number }) {
                 这是你的故事——改成你觉得对的样子，然后确认
               </p>
             </div>
-            <button
-              onClick={confirm}
-              disabled={saving || (current.status === "confirmed" && !dirty)}
-              className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm text-white transition hover:bg-amber-700 disabled:opacity-40"
-            >
-              {saving ? "保存中…" : current.status === "confirmed" && !dirty ? "已确认" : "确认这版"}
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={askReaders}
+                disabled={reacting}
+                title="三位陌生读者读完你的故事，告诉你他们的真实反应"
+                className="rounded-lg border border-amber-600 px-3 py-1.5 text-sm text-amber-700 transition hover:bg-amber-50 disabled:opacity-40"
+              >
+                {reacting ? "读者们在读…" : "听听读者反应"}
+              </button>
+              <button
+                onClick={confirm}
+                disabled={saving || (current.status === "confirmed" && !dirty)}
+                className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm text-white transition hover:bg-amber-700 disabled:opacity-40"
+              >
+                {saving ? "保存中…" : current.status === "confirmed" && !dirty ? "已确认" : "确认这版"}
+              </button>
+            </div>
           </header>
           {error && <p className="px-4 pt-2 text-xs text-red-400">{error}</p>}
           <textarea
@@ -102,6 +128,31 @@ export default function Stories({ refreshKey }: { refreshKey: number }) {
             onChange={(e) => setText(e.target.value)}
             className="flex-1 resize-none bg-stone-50 p-5 text-[15px] leading-loose focus:outline-none"
           />
+          {current.reactions.length > 0 && (
+            <div className="border-t border-stone-200 bg-white px-5 py-4">
+              <p className="mb-3 text-xs font-medium text-stone-400">三位陌生读者读完之后：</p>
+              <div className="space-y-2.5">
+                {current.reactions.map((r) => (
+                  <div key={r.reader} className="flex items-start gap-2.5">
+                    <span
+                      className={
+                        "mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-xs " +
+                        (r.resonated
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-stone-100 text-stone-400")
+                      }
+                    >
+                      {r.resonated ? "我也是" : "还没进去"}
+                    </span>
+                    <p className="text-sm leading-relaxed text-stone-600">
+                      <span className="font-medium text-stone-700">{r.reader}</span>
+                      ：{r.line}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

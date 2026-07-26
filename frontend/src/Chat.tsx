@@ -4,6 +4,7 @@ import {
   getMessages,
   sendMessage,
   stageLabel,
+  transcribeAudio,
   type StoryOut,
 } from "./api";
 
@@ -12,8 +13,7 @@ interface ChatMessage {
   text: string;
 }
 
-const OPENING =
-  "你好呀。不用想着「讲故事」这回事，我们就随便聊聊——最近有什么事，哪怕很小的事，在你心里停留了一会儿？";
+const SKIP_TEXT = "这个话题我不太想聊，我们聊点别的吧";
 
 export default function Chat({
   sessionId,
@@ -30,18 +30,21 @@ export default function Chat({
   const [stage, setStage] = useState("warmup");
   const [storyBusy, setStoryBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const recordStartRef = useRef(0);
 
   useEffect(() => {
     setLoaded(false);
+    setSuggestions([]);
     getMessages(sessionId)
       .then((data) => {
         setStage(data.stage);
-        setMessages(
-          data.messages.length
-            ? data.messages.map((m) => ({ role: m.role, text: m.text }))
-            : [{ role: "assistant", text: OPENING }],
-        );
+        setMessages(data.messages.map((m) => ({ role: m.role, text: m.text })));
       })
       .catch((err) => setMessages([{ role: "system", text: String(err) }]))
       .finally(() => setLoaded(true));
@@ -49,38 +52,90 @@ export default function Chat({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, suggestions]);
 
   const userTurns = messages.filter((m) => m.role === "user").length;
 
-  async function handleSend() {
-    const text = input.trim();
+  async function deliver(text: string, audioPath = "") {
     if (!text || busy || !loaded) return;
     setInput("");
+    setSuggestions([]);
     setBusy(true);
     setMessages((m) => [...m, { role: "user", text }, { role: "assistant", text: "" }]);
     try {
-      await sendMessage(sessionId, text, (ev) => {
-        if (ev.type === "delta") {
-          setMessages((m) => {
-            const next = [...m];
-            next[next.length - 1] = {
-              role: "assistant",
-              text: next[next.length - 1].text + ev.text,
-            };
-            return next;
-          });
-        } else if (ev.type === "done") {
-          setStage(ev.stage);
-        } else if (ev.type === "error") {
-          setMessages((m) => [...m, { role: "system", text: ev.message }]);
-        }
-      });
+      await sendMessage(
+        sessionId,
+        text,
+        (ev) => {
+          if (ev.type === "delta") {
+            setMessages((m) => {
+              const next = [...m];
+              next[next.length - 1] = {
+                role: "assistant",
+                text: next[next.length - 1].text + ev.text,
+              };
+              return next;
+            });
+          } else if (ev.type === "done") {
+            setStage(ev.stage);
+          } else if (ev.type === "suggestions") {
+            setSuggestions(ev.items);
+          } else if (ev.type === "error") {
+            setMessages((m) => [...m, { role: "system", text: ev.message }]);
+          }
+        },
+        audioPath,
+      );
     } catch (err) {
       setMessages((m) => [...m, { role: "system", text: String(err) }]);
     } finally {
       setBusy(false);
       onActivity(); // 侧边栏的会话标题与阶段跟着最新状态走
+    }
+  }
+
+  // ---- 语音：按住说话（push-to-talk，绕开 VAD 的整个难题） ----
+
+  async function startRecording() {
+    if (busy || recording || transcribing) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => e.data.size && chunksRef.current.push(e.data);
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        void finishRecording();
+      };
+      recorderRef.current = recorder;
+      recordStartRef.current = Date.now();
+      recorder.start();
+      setRecording(true);
+    } catch {
+      setMessages((m) => [
+        ...m,
+        { role: "system", text: "无法使用麦克风：请允许浏览器的麦克风权限" },
+      ]);
+    }
+  }
+
+  function stopRecording() {
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    setRecording(false);
+  }
+
+  async function finishRecording() {
+    const duration = Date.now() - recordStartRef.current;
+    const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+    if (duration < 500 || blob.size < 1000) return; // 误触
+    setTranscribing(true);
+    try {
+      const { text, audio_path } = await transcribeAudio(sessionId, blob);
+      await deliver(text, audio_path);
+    } catch (err) {
+      setMessages((m) => [...m, { role: "system", text: String(err) }]);
+    } finally {
+      setTranscribing(false);
     }
   }
 
@@ -144,22 +199,68 @@ export default function Chat({
       </main>
 
       <footer className="border-t border-stone-200 bg-white px-4 py-3">
+        {/* 快捷回应：点选代替打字 */}
+        {!busy && suggestions.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {suggestions.map((s) => (
+              <button
+                key={s}
+                onClick={() => void deliver(s)}
+                className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm text-amber-800 transition hover:bg-amber-100"
+              >
+                {s}
+              </button>
+            ))}
+            <button
+              onClick={() => void deliver(SKIP_TEXT)}
+              className="rounded-full border border-stone-200 px-3 py-1.5 text-sm text-stone-400 transition hover:bg-stone-50"
+            >
+              换个话题
+            </button>
+          </div>
+        )}
+
         <div className="flex gap-2">
+          {/* 按住说话 */}
+          <button
+            onPointerDown={(e) => {
+              e.preventDefault();
+              void startRecording();
+            }}
+            onPointerUp={stopRecording}
+            onPointerLeave={() => recording && stopRecording()}
+            disabled={busy || transcribing}
+            className={
+              "select-none rounded-xl px-4 text-lg transition disabled:opacity-40 " +
+              (recording
+                ? "animate-pulse bg-red-500 text-white"
+                : "border border-stone-300 hover:bg-stone-50")
+            }
+            title="按住说话，松开发送"
+          >
+            {transcribing ? "…" : "🎙️"}
+          </button>
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                void handleSend();
+                void deliver(input.trim());
               }
             }}
             rows={1}
-            placeholder="想到什么说什么，说一半也没关系…（Enter 发送，Shift+Enter 换行）"
+            placeholder={
+              recording
+                ? "松开手指，说的话会自动发出去…"
+                : transcribing
+                  ? "正在听清你刚说的话…"
+                  : "打字，或按住 🎙️ 说话——说一半也没关系"
+            }
             className="flex-1 resize-none rounded-xl border border-stone-300 px-3 py-2 text-[15px] focus:border-amber-500 focus:outline-none"
           />
           <button
-            onClick={handleSend}
+            onClick={() => void deliver(input.trim())}
             disabled={busy || !input.trim()}
             className="rounded-xl bg-stone-800 px-4 text-sm text-white transition hover:bg-stone-700 disabled:opacity-40"
           >
