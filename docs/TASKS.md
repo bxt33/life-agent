@@ -12,17 +12,20 @@ P0 验收标准（来自 [PRD](PRD.md)）：**聊 20 分钟，出一篇让用户
 ## P0 · 访谈 agent 核心闭环
 
 ### M1 骨架搭建
-- [ ] 初始化 backend（FastAPI + SQLModel + SQLite，目录结构按 [TECH.md](TECH.md) §7）
-- [ ] 初始化 frontend（Vite + React + TS + Tailwind）
-- [ ] `.env.example` + LLM 网关层（base_url/api_key/model 可配置）
-- [ ] 打通最小对话链路：前端发文字 → 后端调 LLM → SSE 流式返回
+- [x] 初始化 backend（FastAPI + SQLModel + SQLite，目录结构按 [TECH.md](TECH.md) §7）
+- [x] 初始化 frontend（Vite + React + TS + Tailwind）
+- [x] `.env.example` + LLM 网关层（base_url/api_key/model 可配置，无 key 时 MOCK 模式联调）
+- [x] 打通最小对话链路：前端发文字 → 后端调 LLM → SSE 流式返回（MOCK 模式验证通过）
 
 ### M2 访谈 agent（核心）
-- [ ] `prompts/interviewer.md` 采访者人格 v1
-- [ ] `prompts/probe_strategies.md` 追细节策略 v1
-- [ ] 会话状态管理：访谈进度、已覆盖话题、待深挖线索
-- [ ] 每轮回复前置 `prompts/safety.md` 危机信号检查
+- [x] `prompts/interviewer.md` 采访者人格 v1
+- [x] `prompts/probe_strategies.md` 追细节策略 v1
+- [x] 会话状态管理：阶段状态机（代码判定推进）+ 状态栏（代码维护、尾部追加），见 TECH §3.5
+- [x] 每轮回复前置危机信号检查（第一层关键词规则已上；第二层 LLM 分类确认待做）
+- [ ] 危机检测第二层：命中信号后 LLM 分类确认，降低误报
+- [ ] 配置真实 LLM API Key，联调真实对话效果
 - [ ] **自测：自己被它访谈一次，能不能聊出细节**（不行就回炉提示词，这条反复做）
+- [ ] persona 自动评估环（TECH §3.5.7）：3~5 个 LLM 受访者 + LLM-as-judge
 
 ### M3 语音输入
 - [ ] 前端 MediaRecorder 录音 + 上传
@@ -30,9 +33,9 @@ P0 验收标准（来自 [PRD](PRD.md)）：**聊 20 分钟，出一篇让用户
 - [ ] 原始音频落盘保存（P2 视频剪辑的素材，不能丢）
 
 ### M4 故事稿
-- [ ] `prompts/story_arc.md` 故事弧线模板 v1
-- [ ] 访谈记录 → 第一人称故事稿生成
-- [ ] 故事稿页：行内编辑 + 确认
+- [x] `prompts/story_arc.md` 故事弧线模板 v1 + `story_review.md` 审核提示词
+- [x] 访谈记录 → 第一人称故事稿生成（proposer-reviewer 防编造校验，TECH §3.5.4）
+- [ ] 故事稿页：行内编辑 + 确认（当前仅展示草稿）
 - [ ] **真人测试 ≥3 人：看到故事稿是否主动想发给别人**（P0 验收）
 
 ## P1 · 图文卡片（P0 验收通过后启动）
@@ -49,13 +52,15 @@ P0 验收标准（来自 [PRD](PRD.md)）：**聊 20 分钟，出一篇让用户
 
 | 任务 | 状态 | 开始日期 | 备注 |
 |---|---|---|---|
-| — | — | — | — |
+| 配置真实 LLM Key 并自测访谈效果 | 待用户提供 API Key | 2026-07-27 | 之后进入提示词调优循环 |
 
 ## 已完成
 
 | 日期 | 事项 |
 |---|---|
 | 2026-07-27 | 仓库建立并连接 GitHub（bxt33/life-agent）；PRD v0.1；TECH v0.1；本任务文档建立 |
+| 2026-07-27 | TECH v0.2：吸收《AI Agents in Depth》设计（§3.5 访谈 Agent 设计） |
+| 2026-07-27 | M1 全部完成；M2 提示词 v1 + 状态机/状态栏 + 危机检测第一层；M4 故事稿生成（proposer-reviewer）。MOCK 模式冒烟测试通过（含断流恢复修复） |
 
 ## 决策与变更日志
 
@@ -65,6 +70,9 @@ P0 验收标准（来自 [PRD](PRD.md)）：**聊 20 分钟，出一篇让用户
 |---|---|---|
 | 2026-07-27 | MVP 只做单人闭环，视频和社区后置 | 先验证"被懂/想转发"是否成立，见 PRD §5 |
 | 2026-07-27 | MVP 不建向量库、不做 CI/CD | 不为未发生的规模引入组件，见 TECH §3 |
+| 2026-07-27 | 访谈编排用"外层状态机 + 节点内 LLM"而非自主 ReAct | 流程可控可测试、攻击面小；访谈步骤可预测不需要开放循环，见 TECH §3.5.1 |
+| 2026-07-27 | 语音输入用 push-to-talk（按住说话） | 绕开 VAD 静音阈值/轮次判断这个语音交互最难的问题，见 TECH §3.5.8 |
+| 2026-07-27 | LLM 网关内置 MOCK 模式（无 key 返回固定文本） | 前后端联调不被 API Key 阻塞 |
 
 ---
 

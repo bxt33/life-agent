@@ -1,0 +1,6 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+sqlmodel>=0.0.22
+openai>=1.60
+pydantic-settings>=2.7
+python-dotenv>=1.0
