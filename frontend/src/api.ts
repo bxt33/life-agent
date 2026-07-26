@@ -4,11 +4,55 @@ export type SSEEvent =
   | { type: "safety" }
   | { type: "error"; message: string };
 
-export async function createSession(): Promise<{ id: number }> {
-  const res = await fetch("/api/sessions", { method: "POST" });
-  if (!res.ok) throw new Error("创建会话失败");
+export interface SessionSummary {
+  id: number;
+  stage: string;
+  title: string;
+  created_at: string;
+}
+
+export interface ChatMessageOut {
+  id: number;
+  role: "user" | "assistant";
+  text: string;
+}
+
+export interface StoryOut {
+  id: number;
+  session_id: number;
+  draft_md: string;
+  final_md: string;
+  status: string;
+  created_at: string;
+}
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? `请求失败（${res.status}）`);
+  }
   return res.json();
 }
+
+export const createSession = () => request<{ id: number }>("/api/sessions", { method: "POST" });
+
+export const listSessions = () => request<SessionSummary[]>("/api/sessions");
+
+export const getMessages = (sessionId: number) =>
+  request<{ stage: string; messages: ChatMessageOut[] }>(`/api/sessions/${sessionId}/messages`);
+
+export const generateStory = (sessionId: number) =>
+  request<StoryOut>(`/api/sessions/${sessionId}/story`, { method: "POST" });
+
+export const listStories = () => request<StoryOut[]>("/api/stories");
+
+export const updateStory = (id: number, patch: { final_md?: string; status?: string }) =>
+  request<StoryOut>(`/api/stories/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
 
 export async function sendMessage(
   sessionId: number,
@@ -43,19 +87,13 @@ export async function sendMessage(
   }
 }
 
-export interface StoryOut {
-  id: number;
-  session_id: number;
-  draft_md: string;
-  final_md: string;
-  status: string;
-}
+export const STAGE_LABELS: Record<string, string> = {
+  warmup: "刚开始聊",
+  explore: "寻找故事",
+  deepen: "深入细节",
+  emotion: "聊聊感受",
+  wrapup: "收尾确认",
+  done: "访谈完成",
+};
 
-export async function generateStory(sessionId: number): Promise<StoryOut> {
-  const res = await fetch(`/api/sessions/${sessionId}/story`, { method: "POST" });
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new Error(body?.detail ?? `生成失败（${res.status}）`);
-  }
-  return res.json();
-}
+export const stageLabel = (stage: string) => STAGE_LABELS[stage] ?? stage;

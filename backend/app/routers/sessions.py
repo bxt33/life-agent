@@ -32,6 +32,33 @@ def create_session():
         return {"id": session.id, "stage": session.stage}
 
 
+@router.get("")
+def list_sessions():
+    with Session(engine) as db:
+        sessions = db.exec(
+            select(InterviewSession).order_by(InterviewSession.id.desc())
+        ).all()
+        out = []
+        for s in sessions:
+            first = db.exec(
+                select(Message)
+                .where(Message.session_id == s.id, Message.role == "user")
+                .order_by(Message.id)
+                .limit(1)
+            ).first()
+            if not first:
+                continue  # 一句话没说过的空会话不展示
+            out.append(
+                {
+                    "id": s.id,
+                    "stage": s.stage,
+                    "title": first.text[:20],
+                    "created_at": s.created_at.isoformat(),
+                }
+            )
+        return out
+
+
 @router.get("/{session_id}/messages")
 def list_messages(session_id: int):
     with Session(engine) as db:

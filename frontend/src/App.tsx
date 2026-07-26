@@ -1,157 +1,115 @@
-import { useEffect, useRef, useState } from "react";
-import { createSession, generateStory, sendMessage } from "./api";
+import { useCallback, useEffect, useState } from "react";
+import {
+  createSession,
+  listSessions,
+  stageLabel,
+  type SessionSummary,
+  type StoryOut,
+} from "./api";
+import Chat from "./Chat";
+import Stories from "./Stories";
 
-interface ChatMessage {
-  role: "user" | "assistant" | "system";
-  text: string;
-}
-
-const OPENING =
-  "你好呀。不用想着「讲故事」这回事，我们就随便聊聊——最近有什么事，哪怕很小的事，在你心里停留了一会儿？";
+type View = { type: "chat"; sessionId: number } | { type: "stories" };
 
 export default function App() {
-  const [sessionId, setSessionId] = useState<number | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: "assistant", text: OPENING },
-  ]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [stage, setStage] = useState("warmup");
-  const [story, setStory] = useState<string | null>(null);
-  const [storyBusy, setStoryBusy] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [view, setView] = useState<View | null>(null);
+  const [storiesKey, setStoriesKey] = useState(0);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    createSession()
-      .then((s) => setSessionId(s.id))
-      .catch(() =>
-        setMessages((m) => [
-          ...m,
-          { role: "system", text: "无法连接后端，请确认 backend 已启动（uvicorn app.main:app）" },
-        ]),
-      );
+  const refreshSessions = useCallback(() => {
+    listSessions()
+      .then(setSessions)
+      .catch(() => undefined);
+  }, []);
+
+  const newSession = useCallback(async () => {
+    try {
+      const s = await createSession();
+      setView({ type: "chat", sessionId: s.id });
+      setError("");
+    } catch {
+      setError("无法连接后端，请确认 backend 已启动（uvicorn app.main:app --port 8000）");
+    }
   }, []);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, story]);
+    refreshSessions();
+    void newSession();
+  }, [refreshSessions, newSession]);
 
-  async function handleSend() {
-    const text = input.trim();
-    if (!text || busy || sessionId === null) return;
-    setInput("");
-    setBusy(true);
-    setMessages((m) => [...m, { role: "user", text }, { role: "assistant", text: "" }]);
-    try {
-      await sendMessage(sessionId, text, (ev) => {
-        if (ev.type === "delta") {
-          setMessages((m) => {
-            const next = [...m];
-            next[next.length - 1] = {
-              role: "assistant",
-              text: next[next.length - 1].text + ev.text,
-            };
-            return next;
-          });
-        } else if (ev.type === "done") {
-          setStage(ev.stage);
-        } else if (ev.type === "error") {
-          setMessages((m) => [...m, { role: "system", text: ev.message }]);
-        }
-      });
-    } catch (err) {
-      setMessages((m) => [...m, { role: "system", text: String(err) }]);
-    } finally {
-      setBusy(false);
-    }
+  function handleStoryCreated(_story: StoryOut) {
+    setStoriesKey((k) => k + 1);
+    setView({ type: "stories" });
   }
 
-  async function handleStory() {
-    if (sessionId === null || storyBusy) return;
-    setStoryBusy(true);
-    setStory(null);
-    try {
-      const s = await generateStory(sessionId);
-      setStory(s.draft_md);
-    } catch (err) {
-      setMessages((m) => [...m, { role: "system", text: String(err) }]);
-    } finally {
-      setStoryBusy(false);
-    }
-  }
-
-  const userTurns = messages.filter((m) => m.role === "user").length;
+  const activeSessionId = view?.type === "chat" ? view.sessionId : null;
 
   return (
-    <div className="flex h-full flex-col bg-stone-50 text-stone-800">
-      <header className="flex items-center justify-between border-b border-stone-200 bg-white px-4 py-3">
-        <div>
+    <div className="flex h-full bg-stone-50 text-stone-800">
+      {/* 侧边栏 */}
+      <aside className="flex w-60 shrink-0 flex-col border-r border-stone-200 bg-white">
+        <div className="border-b border-stone-200 px-4 py-3">
           <h1 className="text-base font-semibold">life-agent</h1>
-          <p className="text-xs text-stone-400">把你的故事讲好 · 阶段：{stage}</p>
+          <p className="text-xs text-stone-400">把你的故事讲好</p>
         </div>
-        <button
-          onClick={handleStory}
-          disabled={storyBusy || userTurns < 3}
-          className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm text-white disabled:opacity-40"
-        >
-          {storyBusy ? "正在写你的故事…" : "生成故事稿"}
-        </button>
-      </header>
 
-      <main className="mx-auto w-full max-w-2xl flex-1 space-y-3 overflow-y-auto px-4 py-4">
-        {messages.map((m, i) =>
-          m.role === "system" ? (
-            <p key={i} className="text-center text-xs text-red-400">
-              {m.text}
-            </p>
-          ) : (
-            <div key={i} className={m.role === "user" ? "flex justify-end" : "flex"}>
-              <div
-                className={
-                  "max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed " +
-                  (m.role === "user"
-                    ? "bg-amber-600 text-white"
-                    : "border border-stone-200 bg-white")
-                }
-              >
-                {m.text || "…"}
-              </div>
-            </div>
-          ),
-        )}
-        {story !== null && (
-          <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4">
-            <p className="mb-2 text-xs font-medium text-amber-700">你的故事 · 草稿（我讲得对吗？）</p>
-            <div className="whitespace-pre-wrap text-[15px] leading-relaxed">{story}</div>
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </main>
-
-      <footer className="border-t border-stone-200 bg-white px-4 py-3">
-        <div className="mx-auto flex max-w-2xl gap-2">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void handleSend();
-              }
-            }}
-            rows={1}
-            placeholder="想到什么说什么，说一半也没关系…"
-            className="flex-1 resize-none rounded-xl border border-stone-300 px-3 py-2 text-[15px] focus:border-amber-500 focus:outline-none"
-          />
+        <div className="flex gap-2 p-3">
           <button
-            onClick={handleSend}
-            disabled={busy || !input.trim()}
-            className="rounded-xl bg-stone-800 px-4 text-sm text-white disabled:opacity-40"
+            onClick={newSession}
+            className="flex-1 rounded-lg bg-stone-800 px-3 py-2 text-sm text-white transition hover:bg-stone-700"
           >
-            {busy ? "…" : "发送"}
+            ＋ 新访谈
+          </button>
+          <button
+            onClick={() => setView({ type: "stories" })}
+            className={
+              "flex-1 rounded-lg border px-3 py-2 text-sm transition " +
+              (view?.type === "stories"
+                ? "border-amber-600 bg-amber-50 text-amber-700"
+                : "border-stone-300 hover:bg-stone-50")
+            }
+          >
+            我的故事
           </button>
         </div>
-      </footer>
+
+        <p className="px-4 pb-1 pt-2 text-xs font-medium text-stone-400">历史访谈</p>
+        <nav className="flex-1 overflow-y-auto">
+          {sessions.length === 0 && (
+            <p className="px-4 py-2 text-xs text-stone-300">聊过之后会出现在这里</p>
+          )}
+          {sessions.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => setView({ type: "chat", sessionId: s.id })}
+              className={
+                "block w-full px-4 py-2.5 text-left hover:bg-stone-50 " +
+                (activeSessionId === s.id ? "bg-amber-50" : "")
+              }
+            >
+              <span className="line-clamp-1 text-sm text-stone-700">{s.title}</span>
+              <span className="text-xs text-stone-400">
+                {stageLabel(s.stage)} · {s.created_at.slice(5, 10)}
+              </span>
+            </button>
+          ))}
+        </nav>
+      </aside>
+
+      {/* 主区域 */}
+      <div className="min-w-0 flex-1">
+        {error && <p className="p-4 text-center text-sm text-red-400">{error}</p>}
+        {view?.type === "chat" && (
+          <Chat
+            key={view.sessionId}
+            sessionId={view.sessionId}
+            onActivity={refreshSessions}
+            onStoryCreated={handleStoryCreated}
+          />
+        )}
+        {view?.type === "stories" && <Stories refreshKey={storiesKey} />}
+      </div>
     </div>
   );
 }
