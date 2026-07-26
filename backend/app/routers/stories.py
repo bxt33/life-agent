@@ -36,7 +36,10 @@ async def generate_story(session_id: int):
     if sum(1 for m in history if m.role == "user") < 3:
         raise HTTPException(422, "访谈内容还太少，多聊几轮再生成故事稿")
 
-    draft, review_notes = await story_agent.generate_story(history)
+    try:
+        draft, review_notes = await story_agent.generate_story(history)
+    except Exception as exc:
+        raise HTTPException(502, f"故事稿生成失败（模型服务异常）：{exc}") from exc
 
     with Session(engine) as db:
         story = Story(session_id=session_id, draft_md=draft, review_notes=review_notes)
