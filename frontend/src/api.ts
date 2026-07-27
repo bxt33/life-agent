@@ -46,6 +46,7 @@ export interface ChatMessageOut {
 export interface StoryOut {
   id: number;
   session_id: number;
+  title: string;
   draft_md: string;
   final_md: string;
   status: string;

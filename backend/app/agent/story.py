@@ -81,8 +81,8 @@ async def stream_generate_story(history: list[Message]):
     “””带进度的故事稿生成：逐步 yield 进度 dict，最后 yield done dict。
 
     每个 dict 的 type 字段：
-    - “progress”：中间步骤，含 step（”proposing”/”reviewing”/”revising”）和 message
-    - “done”：完成，含 draft 和 review_log（JSON 字符串）
+    - “progress”：中间步骤，含 step（”proposing”/”reviewing”/”revising”/”titling”）和 message
+    - “done”：完成，含 draft、title 和 review_log（JSON 字符串）
     - “error”：失败，含 message
     “””
     transcript = _transcript(history)
@@ -107,6 +107,21 @@ async def stream_generate_story(history: list[Message]):
             review = await _review(transcript, draft)
             review_log.append(review)
 
-        yield {“type”: “done”, “draft”: draft, “review_log”: json.dumps(review_log, ensure_ascii=False)}
+        yield {“type”: “progress”, “step”: “titling”, “message”: “正在生成标题…”}
+        title = await llm.chat(
+            [
+                {“role”: “system”, “content”: prompts.load(“story_title”)},
+                {“role”: “user”, “content”: draft},
+            ],
+            model=settings.story_model_resolved,
+        )
+        title = title.strip()
+
+        yield {
+            “type”: “done”,
+            “draft”: draft,
+            “title”: title,
+            “review_log”: json.dumps(review_log, ensure_ascii=False),
+        }
     except Exception as exc:
         yield {“type”: “error”, “message”: str(exc)}

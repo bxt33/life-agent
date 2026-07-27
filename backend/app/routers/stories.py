@@ -17,6 +17,7 @@ router = APIRouter(prefix="/api", tags=["stories"])
 class StoryPatch(BaseModel):
     final_md: str | None = None
     status: str | None = None  # draft / confirmed / published
+    title: str | None = None
 
 
 def _sse(data: dict) -> str:
@@ -33,6 +34,7 @@ def _story_out(story: Story) -> dict:
     return {
         "id": story.id,
         "session_id": story.session_id,
+        "title": story.title or "",
         "draft_md": story.draft_md,
         "final_md": story.final_md,
         "status": story.status,
@@ -60,11 +62,13 @@ async def generate_story(session_id: int):
                 return
             if event["type"] == "done":
                 draft = event["draft"]
+                title = event.get("title", "")
                 review_notes = event["review_log"]
                 with Session(engine) as db:
                     story = Story(
                         session_id=session_id,
                         draft_md=draft,
+                        title=title,
                         review_notes=review_notes,
                     )
                     db.add(story)
@@ -130,6 +134,8 @@ def update_story(story_id: int, body: StoryPatch):
             if body.status not in ("draft", "confirmed", "published"):
                 raise HTTPException(422, "invalid status")
             story.status = body.status
+        if body.title is not None:
+            story.title = body.title
         db.add(story)
         db.commit()
         db.refresh(story)

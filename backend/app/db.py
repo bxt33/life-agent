@@ -14,6 +14,7 @@ engine = create_engine(
 _MIGRATIONS = [
     ("story", "reactions_json", "TEXT DEFAULT ''"),
     ("interviewsession", "title", "TEXT DEFAULT ''"),
+    ("story", "title", "TEXT DEFAULT ''"),
 ]
 
 

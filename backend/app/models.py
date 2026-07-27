@@ -29,6 +29,7 @@ class Message(SQLModel, table=True):
 class Story(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     session_id: int = Field(index=True, foreign_key="interviewsession.id")
+    title: str = ""  # LLM 生成的故事标题，10~20 字
     draft_md: str = ""
     final_md: str = ""
     status: str = "draft"  # draft / confirmed / published
