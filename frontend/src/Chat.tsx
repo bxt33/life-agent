@@ -29,6 +29,7 @@ export default function Chat({
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState("warmup");
   const [storyBusy, setStoryBusy] = useState(false);
+  const [storyStep, setStoryStep] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [recording, setRecording] = useState(false);
@@ -142,13 +143,24 @@ export default function Chat({
   async function handleStory() {
     if (storyBusy) return;
     setStoryBusy(true);
+    setStoryStep("正在起草故事稿…");
+    let resultStory: StoryOut | null = null;
     try {
-      const story = await generateStory(sessionId);
-      onStoryCreated(story);
+      await generateStory(sessionId, (ev) => {
+        if (ev.type === "progress") {
+          setStoryStep(ev.message);
+        } else if (ev.type === "done") {
+          resultStory = ev.story;
+        } else if (ev.type === "error") {
+          setMessages((m) => [...m, { role: "system", text: ev.message }]);
+        }
+      });
+      if (resultStory) onStoryCreated(resultStory);
     } catch (err) {
       setMessages((m) => [...m, { role: "system", text: String(err) }]);
     } finally {
       setStoryBusy(false);
+      setStoryStep("");
     }
   }
 
@@ -165,7 +177,7 @@ export default function Chat({
           title={userTurns < 3 ? "多聊几轮，故事的细节够了再生成" : ""}
           className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm text-white transition hover:bg-amber-700 disabled:opacity-40"
         >
-          {storyBusy ? "正在写你的故事…" : "生成故事稿"}
+          {storyBusy ? storyStep || "正在写你的故事…" : "生成故事稿"}
         </button>
       </header>
 

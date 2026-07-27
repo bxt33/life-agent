@@ -43,8 +43,9 @@ def list_cards():
 def create_session(body: SessionIn | None = None):
     card = cards.get_card(body.card_id) if body and body.card_id else None
     opening = card["opening"] if card else cards.FREE_OPENING
+    title = card["title"] if card else "随便聊聊"
     with Session(engine) as db:
-        session = InterviewSession()
+        session = InterviewSession(title=title)
         db.add(session)
         db.commit()
         db.refresh(session)
@@ -62,19 +63,18 @@ def list_sessions():
         ).all()
         out = []
         for s in sessions:
-            first = db.exec(
+            has_user_msg = db.exec(
                 select(Message)
                 .where(Message.session_id == s.id, Message.role == "user")
-                .order_by(Message.id)
                 .limit(1)
             ).first()
-            if not first:
+            if not has_user_msg:
                 continue  # 一句话没说过的空会话不展示
             out.append(
                 {
                     "id": s.id,
                     "stage": s.stage,
-                    "title": first.text[:20],
+                    "title": s.title or "访谈",
                     "created_at": s.created_at.isoformat(),
                 }
             )
@@ -137,10 +137,12 @@ async def post_message(session_id: int, body: MessageIn):
         db.commit()
 
     async def stream():
-        # 危机检测在 Harness 层前置执行（不依赖提示词自觉）
+        # 危机检测：第一层关键词快速扫描，命中后第二层 LLM 确认降低误报
         if safety.check_crisis(text):
-            state.safety_flag = True
-            yield _sse({"type": "safety"})
+            is_real_crisis = await safety.confirm_crisis_llm(text)
+            if is_real_crisis:
+                state.safety_flag = True
+                yield _sse({"type": "safety"})
 
         # 状态抽取（LLM 逐条抽取、代码汇总），失败不阻塞对话
         extraction = await interviewer.extract_state_update(text)

@@ -5,6 +5,11 @@ export type SSEEvent =
   | { type: "suggestions"; items: string[] }
   | { type: "error"; message: string };
 
+export type StorySSEEvent =
+  | { type: "progress"; step: string; message: string }
+  | { type: "done"; story: StoryOut }
+  | { type: "error"; message: string };
+
 export interface TopicCard {
   id: string;
   icon: string;
@@ -93,8 +98,35 @@ export const listSessions = () => request<SessionSummary[]>("/api/sessions");
 export const getMessages = (sessionId: number) =>
   request<{ stage: string; messages: ChatMessageOut[] }>(`/api/sessions/${sessionId}/messages`);
 
-export const generateStory = (sessionId: number) =>
-  request<StoryOut>(`/api/sessions/${sessionId}/story`, { method: "POST" });
+export const generateStory = async (
+  sessionId: number,
+  onEvent: (ev: StorySSEEvent) => void,
+): Promise<void> => {
+  const res = await fetch(`/api/sessions/${sessionId}/story`, { method: "POST" });
+  if (!res.ok || !res.body) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? `故事稿生成失败（${res.status}）`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line.startsWith("data: ")) continue;
+      try {
+        onEvent(JSON.parse(line.slice(6)) as StorySSEEvent);
+      } catch {
+        // 忽略无法解析的分片
+      }
+    }
+  }
+};
 
 export const listStories = () => request<StoryOut[]>("/api/stories");
 

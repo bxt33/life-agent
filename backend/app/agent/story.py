@@ -57,7 +57,7 @@ async def _review(transcript: str, draft: str) -> dict:
 
 
 async def generate_story(history: list[Message]) -> tuple[str, str]:
-    """返回 (故事稿, 审核记录 JSON 字符串)。"""
+    “””返回 (故事稿, 审核记录 JSON 字符串)。”””
     transcript = _transcript(history)
     review_log: list[dict] = []
 
@@ -65,13 +65,48 @@ async def generate_story(history: list[Message]) -> tuple[str, str]:
     for _ in range(MAX_REVISIONS + 1):
         review = await _review(transcript, draft)
         review_log.append(review)
-        if review.get("pass"):
+        if review.get(“pass”):
             break
-        feedback = "\n".join(
-            f"- “{v.get('quote', '')}”：{v.get('reason', '')}"
-            for v in review.get("violations", [])
+        feedback = “\n”.join(
+            f”- “{v.get('quote', '')}”：{v.get('reason', '')}”
+            for v in review.get(“violations”, [])
         )
-        logger.info("story draft rejected by reviewer, revising: %s", feedback)
+        logger.info(“story draft rejected by reviewer, revising: %s”, feedback)
         draft = await _propose(transcript, feedback)
 
     return draft, json.dumps(review_log, ensure_ascii=False)
+
+
+async def stream_generate_story(history: list[Message]):
+    “””带进度的故事稿生成：逐步 yield 进度 dict，最后 yield done dict。
+
+    每个 dict 的 type 字段：
+    - “progress”：中间步骤，含 step（”proposing”/”reviewing”/”revising”）和 message
+    - “done”：完成，含 draft 和 review_log（JSON 字符串）
+    - “error”：失败，含 message
+    “””
+    transcript = _transcript(history)
+    review_log: list[dict] = []
+
+    try:
+        yield {“type”: “progress”, “step”: “proposing”, “message”: “正在起草故事稿…”}
+        draft = await _propose(transcript)
+
+        yield {“type”: “progress”, “step”: “reviewing”, “message”: “正在逐句核查细节…”}
+        review = await _review(transcript, draft)
+        review_log.append(review)
+
+        if not review.get(“pass”):
+            feedback = “\n”.join(
+                f”- “{v.get('quote', '')}”：{v.get('reason', '')}”
+                for v in review.get(“violations”, [])
+            )
+            logger.info(“story draft rejected by reviewer, revising: %s”, feedback)
+            yield {“type”: “progress”, “step”: “revising”, “message”: “发现编造细节，正在修正…”}
+            draft = await _propose(transcript, feedback)
+            review = await _review(transcript, draft)
+            review_log.append(review)
+
+        yield {“type”: “done”, “draft”: draft, “review_log”: json.dumps(review_log, ensure_ascii=False)}
+    except Exception as exc:
+        yield {“type”: “error”, “message”: str(exc)}

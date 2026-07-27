@@ -13,6 +13,7 @@ engine = create_engine(
 # 对已存在的表补新增列（SQLite create_all 不会 ALTER）。MVP 级轻量迁移。
 _MIGRATIONS = [
     ("story", "reactions_json", "TEXT DEFAULT ''"),
+    ("interviewsession", "title", "TEXT DEFAULT ''"),
 ]
 
 

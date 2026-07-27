@@ -13,6 +13,7 @@ class InterviewSession(SQLModel, table=True):
     stage: str = "warmup"  # warmup / explore / deepen / emotion / wrapup / done
     state_json: str = "{}"  # 业务状态：状态栏字段的持久化，见 agent/state.py
     summary: str = ""
+    title: str = ""  # 会话标题（卡牌名 或 随便聊聊），侧边栏展示用
     created_at: datetime = Field(default_factory=utcnow)
 
 

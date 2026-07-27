@@ -1,6 +1,7 @@
 import json
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
@@ -16,6 +17,10 @@ router = APIRouter(prefix="/api", tags=["stories"])
 class StoryPatch(BaseModel):
     final_md: str | None = None
     status: str | None = None  # draft / confirmed / published
+
+
+def _sse(data: dict) -> str:
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 def _story_out(story: Story) -> dict:
@@ -38,6 +43,7 @@ def _story_out(story: Story) -> dict:
 
 @router.post("/sessions/{session_id}/story")
 async def generate_story(session_id: int):
+    """故事稿生成：SSE 流式推送进度，最终返回 done 事件含完整故事对象。"""
     with Session(engine) as db:
         if not db.get(InterviewSession, session_id):
             raise HTTPException(404, "session not found")
@@ -47,21 +53,40 @@ async def generate_story(session_id: int):
     if sum(1 for m in history if m.role == "user") < 3:
         raise HTTPException(422, "访谈内容还太少，多聊几轮再生成故事稿")
 
-    try:
-        draft, review_notes = await story_agent.generate_story(history)
-    except Exception as exc:
-        raise HTTPException(502, f"故事稿生成失败（模型服务异常）：{exc}") from exc
+    async def sse_stream():
+        async for event in story_agent.stream_generate_story(list(history)):
+            if event["type"] == "error":
+                yield _sse({"type": "error", "message": f"故事稿生成失败（模型服务异常）：{event['message']}"})
+                return
+            if event["type"] == "done":
+                draft = event["draft"]
+                review_notes = event["review_log"]
+                with Session(engine) as db:
+                    story = Story(
+                        session_id=session_id,
+                        draft_md=draft,
+                        review_notes=review_notes,
+                    )
+                    db.add(story)
+                    db.commit()
+                    db.refresh(story)
+                    story_dict = _story_out(story)
 
-    with Session(engine) as db:
-        story = Story(session_id=session_id, draft_md=draft, review_notes=review_notes)
-        db.add(story)
-        db.commit()
-        db.refresh(story)
+                # 抽取长期记忆（失败不影响故事稿推送）
+                try:
+                    await memory_agent.extract_and_store(session_id, list(history))
+                except Exception:
+                    pass
 
-    # 轨迹最完整的时机：顺带抽取跨会话长期记忆（失败不影响故事稿返回）
-    await memory_agent.extract_and_store(session_id, list(history))
+                yield _sse({"type": "done", "story": story_dict})
+            else:
+                yield _sse(event)
 
-    return _story_out(story)
+    return StreamingResponse(
+        sse_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/stories/{story_id}/reactions")
